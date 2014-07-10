@@ -1,0 +1,8 @@
+jar: CodeTemplateCloner
+
+dependencies:
+- ../LiteSoftServerUtils
+
+resources: 
+- LICENSE
+
