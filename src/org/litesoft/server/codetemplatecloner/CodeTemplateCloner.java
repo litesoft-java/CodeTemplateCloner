@@ -36,7 +36,6 @@ public class CodeTemplateCloner {
             throws Exception {
         check( "No Args", Currently.isNotNullOrEmpty( pArgs ) );
         String zReplacementString = ConstrainTo.significantOrNull( pArgs[0] );
-        Processor zProcessor = new Processor( zReplacementString );
         check( "1st Arg - " + NOT_SIGNIFICANT, Currently.isNotNull( zReplacementString ) );
         CanonicalDirectories zPaths = new CanonicalDirectories();
         if ( pArgs.length == 1 ) {
@@ -50,20 +49,31 @@ public class CodeTemplateCloner {
                 File zFile = zPaths.add( zArg );
                 check( zArgRef + "Can't Canonicalize as a Directory (invalid path or not a Directory)", Currently.isNotNull( zFile ) );
                 check( zArgRef + "Directory not Readable & Writable", zFile.canRead() && zFile.canWrite() );
+                check( zArgRef + "Directory (provided) may NOT contain '" + mTemplateString + "'", !zFile.getAbsolutePath().contains( mTemplateString ) );
             }
         }
-        zProcessor.process( zPaths.getUserPaths() );
+        createProcessor( zReplacementString ).process( zPaths.getUserPaths() );
         return 0;
     }
 
-    private class Processor {
-        private final String mTemplateStringLC, mReplacementString, mReplacementStringLC;
+    protected Processor createProcessor( String pReplacementString ) {
+        return new Processor( pReplacementString );
+    }
 
-        public Processor( String pReplacementString ) {
+    protected class Processor {
+        protected final String mTemplateStringLC, mReplacementString, mReplacementStringLC;
+        private final CodeLineChanger mCodeLineChanger;
+
+        public Processor( String pReplacementString, CodeLineChanger pCodeLineChanger ) {
             mTemplateStringLC = mTemplateString.toLowerCase();
             mReplacementStringLC = (mReplacementString = pReplacementString).toLowerCase();
             System.out.println( "    Replace: '" + mTemplateString + "' with '" + mReplacementString + "'" );
             System.out.println( "        and: '" + mTemplateStringLC + "' with '" + mReplacementStringLC + "'" );
+            mCodeLineChanger = ConstrainTo.notNull( pCodeLineChanger, CodeLineChanger.NO_OP );
+        }
+
+        public Processor( String pReplacementString ) {
+            this(pReplacementString, null);
         }
 
         public void process( List<String> pUniqueUserDirs ) {
@@ -74,6 +84,12 @@ public class CodeTemplateCloner {
 
         public void process( String pUserDirPath ) {
             System.out.println( "  " + pUserDirPath );
+            processDir( new File( pUserDirPath ) );
+        }
+
+        public void processDir( File pDir ) {
+            String[] zEntries = pDir.list();
+
             // TODO: XXX
         }
     }
