@@ -1,5 +1,6 @@
 package org.litesoft.server.codetemplatecloner;
 
+import org.litesoft.commonfoundation.annotations.*;
 import org.litesoft.commonfoundation.base.*;
 import org.litesoft.commonfoundation.typeutils.*;
 import org.litesoft.server.file.*;
@@ -11,10 +12,26 @@ public class CodeTemplateCloner {
     protected static final String NOT_SIGNIFICANT = "NOT Significant - empty or just spaces";
 
     protected final String mTemplateString, mWhat;
+    protected final Set<String> mFileExtensionsToProcess = Sets.newHashSet();
 
-    public CodeTemplateCloner( String pTemplateString, String pWhat ) {
+    public CodeTemplateCloner( String pTemplateString, String pWhat, String pPrimaryFileExtensionToProcess, String... pAdditionalFileExtensionToProcess ) {
         mTemplateString = Confirm.significant( "TemplateString", pTemplateString );
         mWhat = Confirm.significant( "What", pWhat );
+        mFileExtensionsToProcess.add( validateExtension( pPrimaryFileExtensionToProcess ) );
+        for ( String zExtensionToProcess : ConstrainTo.notNull( pAdditionalFileExtensionToProcess ) ) {
+            mFileExtensionsToProcess.add( validateExtension( zExtensionToProcess ) );
+        }
+    }
+
+    private String validateExtension( String pExtension ) {
+        String zExtension = (pExtension = ConstrainTo.notNull( pExtension )).trim();
+        if ( zExtension.length() == 0 ) {
+            throw new IllegalArgumentException( "Empty Extensions (including nothing but spaces) are not supported" );
+        }
+        if ( !zExtension.equals( pExtension ) ) {
+            throw new IllegalArgumentException( "Extensions with leading or trailing spaces are not supported" );
+        }
+        return pExtension;
     }
 
     protected int usage( String pProblem ) {
@@ -73,7 +90,7 @@ public class CodeTemplateCloner {
         }
 
         public Processor( String pReplacementString ) {
-            this(pReplacementString, null);
+            this( pReplacementString, null );
         }
 
         public void process( List<String> pUniqueUserDirs ) {
@@ -88,9 +105,127 @@ public class CodeTemplateCloner {
         }
 
         public void processDir( File pDir ) {
-            String[] zEntries = pDir.list();
+            processDirs( pDir, pDir.list( FileUtils.DIRECTORIES_ONLY ) );
+            processFiles( pDir, pDir.list( FileUtils.FILES_ONLY ) );
+        }
 
-            // TODO: XXX
+        protected void processDirs( File pDir, String[] pNames ) {
+            for ( String zName : pNames ) {
+                processDir( new File( pDir, processDirName( pDir, zName ) ) );
+            }
+        }
+
+        protected String processDirName( File pDir, String pName ) {
+            String zTransformedName = applyReplacements( pName );
+            if ( !zTransformedName.equals( pName ) ) {
+                File zSourceFile = new File( pDir, pName );
+                File zDestinationFile = new File( pDir, zTransformedName );
+                FileUtils.renameFromTo( zSourceFile, zDestinationFile );
+                System.out.println( "    Dir: " + zSourceFile + " -> " + zDestinationFile );
+            }
+            return zTransformedName;
+        }
+
+        protected String applyReplacements( String pText ) {
+            int zAt = pText.indexOf( mTemplateString );
+            if ( zAt != -1 ) {
+                return applyFrontReplacements( pText, zAt ) + mReplacementString + applyEndReplacements( pText, zAt + mTemplateString.length() );
+            }
+            if ( -1 != (zAt = pText.indexOf( mTemplateStringLC )) ) {
+                return applyFrontReplacements( pText, zAt ) + mReplacementStringLC + applyEndReplacements( pText, zAt + mTemplateStringLC.length() );
+            }
+            return pText;
+        }
+
+        private String applyFrontReplacements( String pText, int pUpTo ) {
+            return (pUpTo == 0) ? "" : applyReplacements( pText.substring( 0, pUpTo ) );
+        }
+
+        private String applyEndReplacements( String pText, int pFrom ) {
+            return (pFrom == pText.length()) ? "" : applyReplacements( pText.substring( pFrom ) );
+        }
+
+        protected void processFiles( File pDir, String[] pNames ) {
+            for ( String zName : pNames ) {
+                processFile( new File( pDir, processFileName( pDir, zName ) ) );
+            }
+        }
+
+        protected String processFileName( File pDir, String pName ) {
+            String zTransformedName = applyReplacements( pName );
+            if ( !zTransformedName.equals( pName ) ) {
+                File zSourceFile = new File( pDir, pName );
+                File zDestinationFile = new File( pDir, zTransformedName );
+                FileUtils.renameFromTo( zSourceFile, zDestinationFile );
+                System.out.println( "    File: " + zSourceFile + " -> " + zDestinationFile );
+            }
+            return zTransformedName;
+        }
+
+        protected void processFile( File pFile ) {
+            if ( shouldProcessFileContents( pFile, FileUtils.getExtension( pFile ) ) ) {
+                processFileContents( pFile );
+            }
+        }
+
+        /**
+         * Override this this method if you need to support text processing of individual files, like a file w/ NO Extension.
+         */
+        @SuppressWarnings("UnusedParameters")
+        protected boolean shouldProcessFileContents( @NotNull File pFile, @NotNull String pExtension ) {
+            return mFileExtensionsToProcess.contains( pExtension );
+        }
+
+        protected void processFileContents( @NotNull File pFile ) {
+            String[] zNewLines = produceUpdatedFileContents( FileUtils.loadTextFile( pFile ) );
+            if ( zNewLines != null ) {
+                FileUtils.Change zChange = FileUtils.storeTextFile( pFile, zNewLines );
+                if ( zChange != null ) {
+                    System.out.print( "      " + pFile );
+                    FileUtils.report( zChange, System.out );
+                    System.out.println();
+                    if ( zChange == FileUtils.Change.Updated ) {
+                        FileUtils.deleteIfExists( FileUtils.asBackupFile( pFile ) );
+                    }
+                }
+            }
+        }
+
+        /**
+         * Produce the updated File Contents OR Null if there are no indicated changes.
+         */
+        protected String[] produceUpdatedFileContents( @NotNull String[] pLines ) {
+            boolean zChanged = false;
+            List<String> zCollector = Lists.newArrayList();
+            for ( String zLine : pLines ) {
+                zChanged |= processFileLine( zCollector, zLine );
+            }
+            return !zChanged ? null // Indicating NO Change
+                             : zCollector.toArray( new String[zCollector.size()] );
+        }
+
+        private boolean processFileLine( List<String> pCollector, String pLine ) {
+            if ( !pLine.contains( mTemplateString ) && !pLine.contains( mTemplateStringLC ) ) {
+                pCollector.add( pLine );
+                return false;
+            }
+            return processFileLineShouldChange( pCollector, pLine );
+        }
+
+        private boolean processFileLineShouldChange( List<String> pCollector, String pLine ) {
+            String zChangedLine = mCodeLineChanger.changeLine( pCollector, pLine );
+            if ( !pLine.equals( zChangedLine ) ) {
+                if ( zChangedLine != null ) {
+                    pCollector.add( zChangedLine );
+                }
+                return true;
+            }
+            zChangedLine = applyReplacements( pLine );
+            if ( !pLine.equals( zChangedLine ) ) {
+                pCollector.add( zChangedLine );
+                return true;
+            }
+            return false;
         }
     }
 }
