@@ -69,28 +69,39 @@ public class CodeTemplateCloner {
                 check( zArgRef + "Directory (provided) may NOT contain '" + mTemplateString + "'", !zFile.getAbsolutePath().contains( mTemplateString ) );
             }
         }
-        createProcessor( zReplacementString ).process( zPaths.getUserPaths() );
+        createProcessor( new Replacer( mTemplateString, zReplacementString ) ).process( zPaths.getUserPaths() );
         return 0;
     }
 
-    protected Processor createProcessor( String pReplacementString ) {
-        return new Processor( pReplacementString );
+    public static CodeLineChanger insertBeforeIfStartsWith(Replacer pReplacer, String pStartsWith) {
+        return new CodeLineChangerStartsWithInsertChangedBefore( pReplacer, pStartsWith );
+    }
+
+    protected Processor createProcessor( Replacer pReplacer ) {
+        return new Processor( pReplacer );
     }
 
     protected class Processor {
-        protected final String mTemplateStringLC, mReplacementString, mReplacementStringLC;
+        protected final Replacer mReplacer;
         private final CodeLineChanger mCodeLineChanger;
+        protected final Set<String> mSkippedDirs;
 
-        public Processor( String pReplacementString, CodeLineChanger pCodeLineChanger ) {
-            mTemplateStringLC = mTemplateString.toLowerCase();
-            mReplacementStringLC = (mReplacementString = pReplacementString).toLowerCase();
-            System.out.println( "    Replace: '" + mTemplateString + "' with '" + mReplacementString + "'" );
-            System.out.println( "        and: '" + mTemplateStringLC + "' with '" + mReplacementStringLC + "'" );
+        protected Processor( Replacer pReplacer, String[] pSkippedDirs, CodeLineChanger pCodeLineChanger ) {
+            mReplacer = pReplacer;
             mCodeLineChanger = ConstrainTo.notNull( pCodeLineChanger, CodeLineChanger.NO_OP );
+            mSkippedDirs = Sets.newHashSet( ConstrainTo.notNull( pSkippedDirs ) );
         }
 
-        public Processor( String pReplacementString ) {
-            this( pReplacementString, null );
+        protected Processor( Replacer pReplacer, CodeLineChanger pCodeLineChanger ) {
+            this(pReplacer, Strings.EMPTY_ARRAY, pCodeLineChanger );
+        }
+
+        protected Processor( Replacer pReplacer, String... pSkippedDirs ) {
+            this( pReplacer, pSkippedDirs, null );
+        }
+
+        protected Processor( Replacer pReplacer ) {
+            this( pReplacer, (CodeLineChanger)null );
         }
 
         public void process( List<String> pUniqueUserDirs ) {
@@ -111,12 +122,22 @@ public class CodeTemplateCloner {
 
         protected void processDirs( File pDir, String[] pNames ) {
             for ( String zName : pNames ) {
-                processDir( new File( pDir, processDirName( pDir, zName ) ) );
+                if ( shouldProcessDir( pDir, zName ) ) {
+                    String zTransformedName = processDirName( pDir, zName );
+                    if ( zTransformedName != null ) {
+                        processDir( new File( pDir, zTransformedName ) );
+                    }
+                }
             }
         }
 
+        @SuppressWarnings("UnusedParameters")
+        protected boolean shouldProcessDir( File pDir, String pName ) {
+            return !mSkippedDirs.contains( pName );
+        }
+
         protected String processDirName( File pDir, String pName ) {
-            String zTransformedName = applyReplacements( pName );
+            String zTransformedName = mReplacer.apply( pName );
             if ( !zTransformedName.equals( pName ) ) {
                 File zSourceFile = new File( pDir, pName );
                 File zDestinationFile = new File( pDir, zTransformedName );
@@ -126,25 +147,6 @@ public class CodeTemplateCloner {
             return zTransformedName;
         }
 
-        protected String applyReplacements( String pText ) {
-            int zAt = pText.indexOf( mTemplateString );
-            if ( zAt != -1 ) {
-                return applyFrontReplacements( pText, zAt ) + mReplacementString + applyEndReplacements( pText, zAt + mTemplateString.length() );
-            }
-            if ( -1 != (zAt = pText.indexOf( mTemplateStringLC )) ) {
-                return applyFrontReplacements( pText, zAt ) + mReplacementStringLC + applyEndReplacements( pText, zAt + mTemplateStringLC.length() );
-            }
-            return pText;
-        }
-
-        private String applyFrontReplacements( String pText, int pUpTo ) {
-            return (pUpTo == 0) ? "" : applyReplacements( pText.substring( 0, pUpTo ) );
-        }
-
-        private String applyEndReplacements( String pText, int pFrom ) {
-            return (pFrom == pText.length()) ? "" : applyReplacements( pText.substring( pFrom ) );
-        }
-
         protected void processFiles( File pDir, String[] pNames ) {
             for ( String zName : pNames ) {
                 processFile( new File( pDir, processFileName( pDir, zName ) ) );
@@ -152,7 +154,7 @@ public class CodeTemplateCloner {
         }
 
         protected String processFileName( File pDir, String pName ) {
-            String zTransformedName = applyReplacements( pName );
+            String zTransformedName = mReplacer.apply( pName );
             if ( !zTransformedName.equals( pName ) ) {
                 File zSourceFile = new File( pDir, pName );
                 File zDestinationFile = new File( pDir, zTransformedName );
@@ -181,7 +183,7 @@ public class CodeTemplateCloner {
             if ( zNewLines != null ) {
                 FileUtils.Change zChange = FileUtils.storeTextFile( pFile, zNewLines );
                 if ( zChange != null ) {
-                    System.out.print( "      " + pFile );
+                    System.out.print( "          " + pFile );
                     FileUtils.report( zChange, System.out );
                     System.out.println();
                     if ( zChange == FileUtils.Change.Updated ) {
@@ -205,11 +207,11 @@ public class CodeTemplateCloner {
         }
 
         private boolean processFileLine( List<String> pCollector, String pLine ) {
-            if ( !pLine.contains( mTemplateString ) && !pLine.contains( mTemplateStringLC ) ) {
-                pCollector.add( pLine );
-                return false;
+            if ( mReplacer.willChange( pLine ) ) {
+                return processFileLineShouldChange( pCollector, pLine );
             }
-            return processFileLineShouldChange( pCollector, pLine );
+            pCollector.add( pLine );
+            return false;
         }
 
         private boolean processFileLineShouldChange( List<String> pCollector, String pLine ) {
@@ -220,7 +222,7 @@ public class CodeTemplateCloner {
                 }
                 return true;
             }
-            zChangedLine = applyReplacements( pLine );
+            zChangedLine = mReplacer.apply( pLine );
             if ( !pLine.equals( zChangedLine ) ) {
                 pCollector.add( zChangedLine );
                 return true;
