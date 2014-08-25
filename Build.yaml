@@ -1,6 +1,7 @@
 jar: CodeTemplateCloner
 
-dependencies:
+compiledependencies:
+- ../LiteSoftCommonFoundation
 - ../LiteSoftServerUtils
 
 resources: 
